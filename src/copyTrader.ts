@@ -6,6 +6,7 @@ import { Logger } from "./logger.js";
 import { State, ensureDailyVolume, noteSeenTrade } from "./state.js";
 import { ActivityTrade, Position } from "./types.js";
 import { formatUsd, isPositive, nowSec } from "./utils.js";
+import fs from 'fs';  // 新增：用于文件持久化
 
 class PositionCache {
   private lastFetch = 0;
@@ -34,6 +35,9 @@ class PositionCache {
 
 export class CopyTrader {
   private positionCache: PositionCache;
+  // 新增：去重存储
+  private processedConditions: Set<string> = new Set();
+  private readonly processedFile = '/data/processed_conditions.json';
 
   constructor(
     private config: Config,
@@ -43,6 +47,26 @@ export class CopyTrader {
     private logger: Logger
   ) {
     this.positionCache = new PositionCache(dataApi, config.profileAddress, 30000, logger);
+    // 新增：加载已跟单记录
+    this.loadProcessedConditions();
+  }
+
+  // 新增：加载已跟单记录
+  private loadProcessedConditions() {
+    try {
+      const data = fs.readFileSync(this.processedFile, 'utf-8');
+      const arr = JSON.parse(data);
+      this.processedConditions = new Set(arr);
+      this.logger.info(`已加载 ${this.processedConditions.size} 个已跟单市场`);
+    } catch (err) {
+      this.logger.info('未找到历史记录，将创建新文件');
+    }
+  }
+
+  // 新增：保存已跟单记录
+  private saveProcessedConditions() {
+    const arr = Array.from(this.processedConditions);
+    fs.writeFileSync(this.processedFile, JSON.stringify(arr, null, 2));
   }
 
   private tradeKey(trade: ActivityTrade): string {
@@ -148,6 +172,17 @@ export class CopyTrader {
   async handleTrade(trade: ActivityTrade): Promise<void> {
     if (!this.shouldCopySide(trade)) return;
 
+    // 新增：获取 conditionId 进行去重
+    // 注意：ActivityTrade 可能没有 conditionId，我们使用 tokenId 作为临时方案
+    // 如果 trade 中有 conditionId 字段，可以改用 conditionId
+    const marketId = trade.asset;  // 使用 tokenId 作为市场标识
+    
+    // 去重检查
+    if (this.processedConditions.has(marketId)) {
+      this.logger.debug(`跳过已跟单市场: ${marketId}`);
+      return;
+    }
+
     const tradeKey = this.tradeKey(trade);
     if (this.state.seenTrades[tradeKey]) return;
 
@@ -207,6 +242,12 @@ export class CopyTrader {
         size,
         notional: formatUsd(notional),
       });
+      
+      // 新增：记录已跟单并持久化
+      this.processedConditions.add(marketId);
+      this.saveProcessedConditions();
+      this.logger.info(`已记录市场: ${marketId}`);
+      
     } catch (err) {
       const message = (err as Error).message ?? "unknown error";
       if (message.includes("not enough balance") || message.includes("allowance")) {
