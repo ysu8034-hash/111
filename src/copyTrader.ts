@@ -6,7 +6,7 @@ import { Logger } from "./logger.js";
 import { State, ensureDailyVolume, noteSeenTrade } from "./state.js";
 import { ActivityTrade, Position } from "./types.js";
 import { formatUsd, isPositive, nowSec } from "./utils.js";
-import fs from 'fs';  // 新增：用于文件持久化
+import fs from "fs";
 
 class PositionCache {
   private lastFetch = 0;
@@ -35,9 +35,10 @@ class PositionCache {
 
 export class CopyTrader {
   private positionCache: PositionCache;
-  // 新增：去重存储
+  // conditionId 去重相关
   private processedConditions: Set<string> = new Set();
-  private readonly processedFile = '/data/processed_conditions.json';
+  private readonly processedFile = "/data/processed_conditions.json";
+  private conditionIdCache: Map<string, string> = new Map();
 
   constructor(
     private config: Config,
@@ -47,26 +48,39 @@ export class CopyTrader {
     private logger: Logger
   ) {
     this.positionCache = new PositionCache(dataApi, config.profileAddress, 30000, logger);
-    // 新增：加载已跟单记录
     this.loadProcessedConditions();
   }
 
-  // 新增：加载已跟单记录
   private loadProcessedConditions() {
     try {
-      const data = fs.readFileSync(this.processedFile, 'utf-8');
+      const data = fs.readFileSync(this.processedFile, "utf-8");
       const arr = JSON.parse(data);
       this.processedConditions = new Set(arr);
-      this.logger.info(`已加载 ${this.processedConditions.size} 个已跟单市场`);
+      this.logger.info(`已加载 ${this.processedConditions.size} 个已跟单市场 (conditionId)`);
     } catch (err) {
-      this.logger.info('未找到历史记录，将创建新文件');
+      this.logger.info("未找到历史记录，将创建新文件");
     }
   }
 
-  // 新增：保存已跟单记录
   private saveProcessedConditions() {
     const arr = Array.from(this.processedConditions);
     fs.writeFileSync(this.processedFile, JSON.stringify(arr, null, 2));
+  }
+
+  private async getConditionId(tokenId: string): Promise<string | null> {
+    if (this.conditionIdCache.has(tokenId)) {
+      return this.conditionIdCache.get(tokenId)!;
+    }
+    try {
+      const market = await this.dataApi.getMarketByTokenId(tokenId);
+      if (market?.conditionId) {
+        this.conditionIdCache.set(tokenId, market.conditionId);
+        return market.conditionId;
+      }
+    } catch (err) {
+      this.logger.debug(`获取 conditionId 失败 ${tokenId}: ${err}`);
+    }
+    return null;
   }
 
   private tradeKey(trade: ActivityTrade): string {
@@ -139,7 +153,13 @@ export class CopyTrader {
     return { size, notional };
   }
 
-  private async clampToPosition(side: Side, tokenId: string, size: number, notional: number, price: number) {
+  private async clampToPosition(
+    side: Side,
+    tokenId: string,
+    size: number,
+    notional: number,
+    price: number
+  ) {
     if (side === Side.BUY) {
       const position = await this.positionCache.getPositionByToken(tokenId);
       const priceHint = position?.curPrice ?? position?.avgPrice ?? price;
@@ -172,15 +192,29 @@ export class CopyTrader {
   async handleTrade(trade: ActivityTrade): Promise<void> {
     if (!this.shouldCopySide(trade)) return;
 
-    // 新增：获取 conditionId 进行去重
-    // 注意：ActivityTrade 可能没有 conditionId，我们使用 tokenId 作为临时方案
-    // 如果 trade 中有 conditionId 字段，可以改用 conditionId
-    const marketId = trade.asset;  // 使用 tokenId 作为市场标识
-    
-    // 去重检查
-    if (this.processedConditions.has(marketId)) {
-      this.logger.debug(`跳过已跟单市场: ${marketId}`);
-      return;
+    // 获取 conditionId 进行去重
+    let conditionId = (trade as any).conditionId;
+    if (!conditionId) {
+      conditionId = await this.getConditionId(trade.asset);
+    }
+
+    if (conditionId) {
+      if (this.processedConditions.has(conditionId)) {
+        this.logger.debug(`跳过已跟单市场 (conditionId): ${conditionId}`);
+        return;
+      }
+    } else {
+      // 降级：使用 tokenId 去重
+      this.logger.warn(`无法获取 conditionId，降级使用 tokenId 去重: ${trade.asset}`);
+      // 这里可以保留一个基于 tokenId 的 Set，但为了简单，我们直接使用 tokenId 字符串去重
+      // 为了不破坏原有逻辑，我们复用 processedConditions 但加上前缀 "token:" 
+      const fallbackKey = `token:${trade.asset}`;
+      if (this.processedConditions.has(fallbackKey)) {
+        this.logger.debug(`跳过已跟单市场 (tokenId): ${trade.asset}`);
+        return;
+      }
+      // 记录时也用 fallbackKey
+      conditionId = fallbackKey;
     }
 
     const tradeKey = this.tradeKey(trade);
@@ -204,7 +238,13 @@ export class CopyTrader {
     size = clamped.size;
     notional = clamped.notional;
 
-    const positionClamped = await this.clampToPosition(side, trade.asset, size, notional, trade.price);
+    const positionClamped = await this.clampToPosition(
+      side,
+      trade.asset,
+      size,
+      notional,
+      trade.price
+    );
     if (!positionClamped) {
       noteSeenTrade(this.state, tradeKey, trade.timestamp);
       return;
@@ -216,10 +256,16 @@ export class CopyTrader {
       this.logger.info("DRY_RUN order", {
         side: trade.side,
         tokenId: trade.asset,
+        conditionId,
         price: trade.price,
         size,
         notional: formatUsd(notional),
       });
+      // 模拟模式也记录已跟单
+      if (!this.processedConditions.has(conditionId)) {
+        this.processedConditions.add(conditionId);
+        this.saveProcessedConditions();
+      }
       noteSeenTrade(this.state, tradeKey, trade.timestamp);
       return;
     }
@@ -238,16 +284,18 @@ export class CopyTrader {
       this.logger.info("Order placed", {
         side: trade.side,
         tokenId: trade.asset,
+        conditionId,
         price: trade.price,
         size,
         notional: formatUsd(notional),
       });
-      
-      // 新增：记录已跟单并持久化
-      this.processedConditions.add(marketId);
-      this.saveProcessedConditions();
-      this.logger.info(`已记录市场: ${marketId}`);
-      
+
+      // 记录已跟单
+      if (!this.processedConditions.has(conditionId)) {
+        this.processedConditions.add(conditionId);
+        this.saveProcessedConditions();
+        this.logger.info(`已记录市场: ${conditionId}`);
+      }
     } catch (err) {
       const message = (err as Error).message ?? "unknown error";
       if (message.includes("not enough balance") || message.includes("allowance")) {
