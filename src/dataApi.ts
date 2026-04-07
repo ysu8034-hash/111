@@ -42,14 +42,20 @@ export class DataApiClient {
     }
   }
 
-  // 新增：通过 tokenId 获取市场信息（含 conditionId）
+  /**
+   * 通过 tokenId 获取市场信息（含 conditionId）
+   * 使用 Gamma API 端点：https://gamma-api.polymarket.com/markets?token_id=
+   */
   async getMarketByTokenId(tokenId: string): Promise<{ conditionId: string } | null> {
-    const url = `${this.host}/markets/token/${tokenId}`;
+    const url = `https://gamma-api.polymarket.com/markets?token_id=${tokenId}`;
     try {
       const res = await fetch(url);
       if (!res.ok) return null;
       const data = await res.json();
-      return data || null;
+      if (Array.isArray(data) && data.length > 0 && data[0].conditionId) {
+        return { conditionId: data[0].conditionId };
+      }
+      return null;
     } catch (err) {
       this.logger.debug(`Failed to fetch market for token ${tokenId}: ${err}`);
       return null;
