@@ -6,7 +6,7 @@ import { Logger } from "./logger.js";
 import { State, ensureDailyVolume, noteSeenTrade } from "./state.js";
 import { ActivityTrade, Position } from "./types.js";
 import { formatUsd, isPositive, nowSec } from "./utils.js";
-import fs from "fs";
+import fs from 'fs';  // 新增：用于文件持久化
 
 class PositionCache {
   private lastFetch = 0;
@@ -35,12 +35,9 @@ class PositionCache {
 
 export class CopyTrader {
   private positionCache: PositionCache;
+  // 新增：去重存储
   private processedConditions: Set<string> = new Set();
-  private readonly processedFile = "/data/processed_conditions.json";
-  private conditionIdCache: Map<string, string> = new Map();
-  private saveTimeout: NodeJS.Timeout | null = null;
-  private readonly SAVE_DEBOUNCE_MS = 5000;
-  private readonly slippageTolerance: number;
+  private readonly processedFile = '/data/processed_conditions.json';
 
   constructor(
     private config: Config,
@@ -50,60 +47,26 @@ export class CopyTrader {
     private logger: Logger
   ) {
     this.positionCache = new PositionCache(dataApi, config.profileAddress, 30000, logger);
+    // 新增：加载已跟单记录
     this.loadProcessedConditions();
-    this.slippageTolerance = parseFloat(process.env.SLIPPAGE_TOLERANCE || "0.05");
-    this.setupGracefulShutdown();
   }
 
-  private setupGracefulShutdown() {
-    const forceSave = () => {
-      if (this.saveTimeout) {
-        clearTimeout(this.saveTimeout);
-        this.saveProcessedConditionsImmediate();
-      }
-    };
-    process.on("beforeExit", forceSave);
-    process.on("SIGTERM", forceSave);
-  }
-
+  // 新增：加载已跟单记录
   private loadProcessedConditions() {
     try {
-      const data = fs.readFileSync(this.processedFile, "utf-8");
+      const data = fs.readFileSync(this.processedFile, 'utf-8');
       const arr = JSON.parse(data);
       this.processedConditions = new Set(arr);
-      this.logger.info(`已加载 ${this.processedConditions.size} 个已跟单市场 (conditionId)`);
+      this.logger.info(`已加载 ${this.processedConditions.size} 个已跟单市场`);
     } catch (err) {
-      this.logger.info("未找到历史记录，将创建新文件");
+      this.logger.info('未找到历史记录，将创建新文件');
     }
   }
 
-  private saveProcessedConditionsImmediate() {
+  // 新增：保存已跟单记录
+  private saveProcessedConditions() {
     const arr = Array.from(this.processedConditions);
     fs.writeFileSync(this.processedFile, JSON.stringify(arr, null, 2));
-  }
-
-  private saveProcessedConditionsDebounced() {
-    if (this.saveTimeout) clearTimeout(this.saveTimeout);
-    this.saveTimeout = setTimeout(() => {
-      this.saveProcessedConditionsImmediate();
-      this.saveTimeout = null;
-    }, this.SAVE_DEBOUNCE_MS);
-  }
-
-  private async getConditionId(tokenId: string): Promise<string | null> {
-    if (this.conditionIdCache.has(tokenId)) {
-      return this.conditionIdCache.get(tokenId)!;
-    }
-    try {
-      const market = await this.dataApi.getMarketByTokenId(tokenId);
-      if (market?.conditionId) {
-        this.conditionIdCache.set(tokenId, market.conditionId);
-        return market.conditionId;
-      }
-    } catch (err) {
-      this.logger.debug(`获取 conditionId 失败 ${tokenId}: ${err}`);
-    }
-    return null;
   }
 
   private tradeKey(trade: ActivityTrade): string {
@@ -115,7 +78,7 @@ export class CopyTrader {
   }
 
   private computeSize(trade: ActivityTrade): { size: number; notional: number } | null {
-    const price = typeof trade.price === "string" ? parseFloat(trade.price) : trade.price;
+    const price = trade.price;
     if (!isPositive(price)) return null;
 
     const ratio = this.effectiveRatio(trade.proxyWallet.toLowerCase());
@@ -176,13 +139,7 @@ export class CopyTrader {
     return { size, notional };
   }
 
-  private async clampToPosition(
-    side: Side,
-    tokenId: string,
-    size: number,
-    notional: number,
-    price: number
-  ) {
+  private async clampToPosition(side: Side, tokenId: string, size: number, notional: number, price: number) {
     if (side === Side.BUY) {
       const position = await this.positionCache.getPositionByToken(tokenId);
       const priceHint = position?.curPrice ?? position?.avgPrice ?? price;
@@ -212,46 +169,17 @@ export class CopyTrader {
     return this.config.copySide === trade.side;
   }
 
-  // 修正：直接调用 CLOB 公开 API 获取订单簿，不再依赖 ClobService 的方法
-  private async getBestPrice(tokenId: string, side: Side, retries = 1): Promise<number | null> {
-    const url = `https://clob.polymarket.com/book?token_id=${tokenId}`;
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        if (side === Side.BUY) {
-          if (data.asks && data.asks.length) return parseFloat(data.asks[0].price);
-        } else {
-          if (data.bids && data.bids.length) return parseFloat(data.bids[0].price);
-        }
-      } catch (err) {
-        this.logger.debug(`获取订单簿失败 (尝试 ${attempt + 1}): ${err}`);
-      }
-      if (attempt < retries) await new Promise((r) => setTimeout(r, 500));
-    }
-    return null;
-  }
-
-  async handleTrade(trade: ActivityTrade, trader: string): Promise<void> {
-    if (trader.toLowerCase() === this.config.profileAddress.toLowerCase()) {
-      this.logger.debug(`跳过自己的交易: ${trader}`);
-      return;
-    }
-
+  async handleTrade(trade: ActivityTrade): Promise<void> {
     if (!this.shouldCopySide(trade)) return;
 
-    let conditionId = (trade as any).conditionId;
-    if (!conditionId) {
-      conditionId = await this.getConditionId(trade.asset);
-    }
-    if (!conditionId) {
-      this.logger.warn(`无法获取 conditionId，跳过交易: tokenId=${trade.asset}, trader=${trader}`);
-      return;
-    }
-
-    if (this.processedConditions.has(conditionId)) {
-      this.logger.debug(`跳过已跟单市场 (conditionId): ${conditionId}, trader=${trader}`);
+    // 新增：获取 conditionId 进行去重
+    // 注意：ActivityTrade 可能没有 conditionId，我们使用 tokenId 作为临时方案
+    // 如果 trade 中有 conditionId 字段，可以改用 conditionId
+    const marketId = trade.asset;  // 使用 tokenId 作为市场标识
+    
+    // 去重检查
+    if (this.processedConditions.has(marketId)) {
+      this.logger.debug(`跳过已跟单市场: ${marketId}`);
       return;
     }
 
@@ -267,9 +195,8 @@ export class CopyTrader {
     const side = trade.side === "BUY" ? Side.BUY : Side.SELL;
     let size = computed.size;
     let notional = computed.notional;
-    const priceNum = typeof trade.price === "string" ? parseFloat(trade.price) : trade.price;
 
-    const clamped = this.clampToLimits(side, size, notional, priceNum);
+    const clamped = this.clampToLimits(side, size, notional, trade.price);
     if (!clamped) {
       noteSeenTrade(this.state, tradeKey, trade.timestamp);
       return;
@@ -277,7 +204,7 @@ export class CopyTrader {
     size = clamped.size;
     notional = clamped.notional;
 
-    const positionClamped = await this.clampToPosition(side, trade.asset, size, notional, priceNum);
+    const positionClamped = await this.clampToPosition(side, trade.asset, size, notional, trade.price);
     if (!positionClamped) {
       noteSeenTrade(this.state, tradeKey, trade.timestamp);
       return;
@@ -285,42 +212,14 @@ export class CopyTrader {
     size = positionClamped.size;
     notional = positionClamped.notional;
 
-    const executionPrice = await this.getBestPrice(trade.asset, side, 1);
-    if (executionPrice === null) {
-      this.logger.warn(`无法获取订单簿价格，跳过订单`, { tokenId: trade.asset });
-      noteSeenTrade(this.state, tradeKey, trade.timestamp);
-      return;
-    }
-
-    const originalPrice = priceNum;
-    const slippage = Math.abs(executionPrice - originalPrice) / originalPrice;
-    if (slippage > this.slippageTolerance) {
-      this.logger.warn(`价格滑落过大 (${(slippage * 100).toFixed(1)}%)，放弃订单`, {
-        tradePrice: originalPrice,
-        executionPrice,
-        trader,
-        tokenId: trade.asset,
-        tolerance: this.slippageTolerance,
-      });
-      noteSeenTrade(this.state, tradeKey, trade.timestamp);
-      return;
-    }
-
     if (this.config.dryRun) {
       this.logger.info("DRY_RUN order", {
-        trader,
         side: trade.side,
         tokenId: trade.asset,
-        conditionId,
-        originalPrice,
-        executionPrice,
+        price: trade.price,
         size,
         notional: formatUsd(notional),
       });
-      if (!this.processedConditions.has(conditionId)) {
-        this.processedConditions.add(conditionId);
-        this.saveProcessedConditionsDebounced();
-      }
       noteSeenTrade(this.state, tradeKey, trade.timestamp);
       return;
     }
@@ -329,7 +228,7 @@ export class CopyTrader {
       await this.clob.placeLimitOrder({
         tokenId: trade.asset,
         side,
-        price: executionPrice,
+        price: trade.price,
         size,
       });
       if (side === Side.BUY) {
@@ -337,21 +236,18 @@ export class CopyTrader {
         this.state.dailyVolume.spentUsd += notional;
       }
       this.logger.info("Order placed", {
-        trader,
         side: trade.side,
         tokenId: trade.asset,
-        conditionId,
-        originalPrice,
-        executionPrice,
+        price: trade.price,
         size,
         notional: formatUsd(notional),
       });
-
-      if (!this.processedConditions.has(conditionId)) {
-        this.processedConditions.add(conditionId);
-        this.saveProcessedConditionsDebounced();
-        this.logger.info(`已记录市场: ${conditionId}`);
-      }
+      
+      // 新增：记录已跟单并持久化
+      this.processedConditions.add(marketId);
+      this.saveProcessedConditions();
+      this.logger.info(`已记录市场: ${marketId}`);
+      
     } catch (err) {
       const message = (err as Error).message ?? "unknown error";
       if (message.includes("not enough balance") || message.includes("allowance")) {
@@ -388,7 +284,7 @@ export class CopyTrader {
       }
 
       for (const trade of trades) {
-        await this.handleTrade(trade, trader);
+        await this.handleTrade(trade);
         this.state.lastSeen[trader] = Math.max(this.state.lastSeen[trader] || 0, trade.timestamp);
       }
     }
