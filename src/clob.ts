@@ -52,19 +52,38 @@ export class ClobService {
       funderAddress: config.funderAddress,
     });
 
-    // 强制创建新的 API Key，完全忽略任何已有的 creds
-    logger.info("Force creating new API keys");
-    const newCreds = await temp.createApiKey();
-    if (!ClobService.isValidCreds(newCreds)) {
-      throw new Error("Failed to create new API keys. Check your private key and network.");
+    // 优先使用 config 中已有的 API Key
+    let creds = config.apiCreds;
+    
+    if (creds) {
+      logger.info("Using provided API key");
+    } else {
+      // 如果没有提供，尝试派生
+      logger.info("No API key provided, attempting to derive");
+      const derived = await temp.deriveApiKey();
+      if (ClobService.isValidCreds(derived)) {
+        creds = derived;
+        logger.info("Derived existing API key");
+      } else {
+        // 派生失败，创建新的
+        logger.info("No existing API key found, creating new one");
+        const created = await temp.createApiKey();
+        if (ClobService.isValidCreds(created)) {
+          creds = created;
+          logger.info("Created new API key");
+        } else {
+          throw new Error(
+            "Unable to create or derive API keys. Check SIGNATURE_TYPE, PRIVATE_KEY, and FUNDER_ADDRESS/PROFILE_ADDRESS.",
+          );
+        }
+      }
     }
-    logger.info("Successfully created new API keys");
 
     const client = new ClobClient({
       host: config.host,
       chain: config.chainId,
       signer: signer,
-      creds: newCreds,
+      creds: creds,
       signatureType: config.signatureType,
       funderAddress: config.funderAddress,
     });
