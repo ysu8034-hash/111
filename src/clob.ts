@@ -44,6 +44,13 @@ export class ClobService {
     
     logger.info(`Initializing ClobClient with signatureType: ${config.signatureType}`);
     
+    // 临时硬编码，强制使用你的 API Key
+    config.apiCreds = {
+      key: "019dd991-8d22-73dd-a599-2d0e989e24a2",
+      secret: "M_pUrU7MK7u03mEOrURiahHZ-PUF-kbS70Zhj08xgzw=",
+      passphrase: "4e9ebc7566fec32862a17debaa819278b4d7e79c3dce405f9d418cc94e1ce14c"
+    };
+    
     const temp = new ClobClient({
       host: config.host,
       chain: config.chainId,
