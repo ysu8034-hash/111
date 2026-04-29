@@ -44,11 +44,11 @@ export class ClobService {
     
     logger.info(`Initializing ClobClient with signatureType: ${config.signatureType}`);
     
-    // 临时硬编码，强制使用你的 API Key
-    config.apiCreds = {
-      key: "019dd991-8d22-73dd-a599-2d0e989e24a2",
-      secret: "M_pUrU7MK7u03mEOrURiahHZ-PUF-kbS70Zhj08xgzw=",
-      passphrase: "4e9ebc7566fec32862a17debaa819278b4d7e79c3dce405f9d418cc94e1ce14c"
+    // 硬编码 API Key（使用最新的）
+    const hardcodedCreds: ApiKeyCreds = {
+      key: "019dd9be-1fe5-7bb9-91a8-0c5b3162a1a2",
+      secret: "xDe55InKTPUJ2NpnzXgNw8uoUqMo-UxYwx9rpA5MJos=",
+      passphrase: "785f4ff3765b4325946ad065640138613d93eefa5d396a361cb54119c2f9f899"
     };
     
     const temp = new ClobClient({
@@ -59,21 +59,19 @@ export class ClobService {
       funderAddress: config.funderAddress,
     });
 
-    // 优先使用 config 中已有的 API Key
-    let creds = config.apiCreds;
+    // 直接使用硬编码的 API Key
+    let creds = hardcodedCreds;
+    logger.info("Using hardcoded API key");
     
-    if (creds) {
-      logger.info("Using provided API key");
-    } else {
-      // 如果没有提供，尝试派生
-      logger.info("No API key provided, attempting to derive");
+    // 验证 API Key 是否有效
+    if (!ClobService.isValidCreds(creds)) {
+      logger.warn("Hardcoded API key validation failed, attempting to derive");
       const derived = await temp.deriveApiKey();
       if (ClobService.isValidCreds(derived)) {
         creds = derived;
         logger.info("Derived existing API key");
       } else {
-        // 派生失败，创建新的
-        logger.info("No existing API key found, creating new one");
+        logger.info("Creating new API key");
         const created = await temp.createApiKey();
         if (ClobService.isValidCreds(created)) {
           creds = created;
