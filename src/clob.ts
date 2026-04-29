@@ -44,7 +44,6 @@ export class ClobService {
     
     logger.info(`Initializing ClobClient with signatureType: ${config.signatureType}`);
     
-    // V2 风格：使用对象参数
     const temp = new ClobClient({
       host: config.host,
       chain: config.chainId,
@@ -74,7 +73,6 @@ export class ClobService {
       }
     }
 
-    // V2 风格：使用对象参数
     const client = new ClobClient({
       host: config.host,
       chain: config.chainId,
@@ -139,16 +137,19 @@ export class ClobService {
       return;
     }
 
-    // V2 标准下单：使用 GTD（Good Til Date）
+    // 设置过期时间：当前时间 + 5 分钟（300 秒）
+    const expiration = Math.floor(Date.now() / 1000) + 300;
+
     const resp = await this.client.createAndPostOrder(
       {
         tokenID: tokenId,
         price,
         side,
         size,
+        expiration,  // 添加过期时间
       },
       { tickSize: meta.tickSize, negRisk: meta.negRisk },
-      OrderType.GTD,  // 改为 GTD（V2 兼容）
+      OrderType.GTD,
     );
     
     if (resp?.error) {
