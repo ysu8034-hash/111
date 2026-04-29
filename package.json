@@ -12,7 +12,7 @@
   "dependencies": {
     "@polymarket/builder-relayer-client": "^0.0.8",
     "@polymarket/builder-signing-sdk": "^0.0.8",
-    "@polymarket/clob-client": "^5.2.1",
+    "@polymarket/clob-client-v2": "latest"，
     "dotenv": "^17.2.3",
     "ethers": "^5.8.0",
     "viem": "^2.44.4"
