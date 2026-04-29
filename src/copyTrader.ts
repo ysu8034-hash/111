@@ -1,4 +1,4 @@
-import { Side } from "@polymarket/clob-client";
+import { Side } from "@polymarket/clob-client-v2";
 import { Config, CopyStrategy } from "./config.js";
 import { ClobService } from "./clob.js";
 import { DataApiClient } from "./dataApi.js";
