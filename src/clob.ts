@@ -52,24 +52,24 @@ export class ClobService {
       funderAddress: config.funderAddress,
     });
 
-    let creds = config.apiCreds;
-    if (!creds) {
-      logger.info("Deriving Polymarket API keys");
-      const derived = await temp.deriveApiKey();
-      if (ClobService.isValidCreds(derived)) {
-        creds = derived;
-        logger.info("Derived API keys.");
+    // 强制忽略已有的 creds，重新派生 API Key
+    let creds = undefined;
+    
+    logger.info("Deriving Polymarket API keys");
+    const derived = await temp.deriveApiKey();
+    if (ClobService.isValidCreds(derived)) {
+      creds = derived;
+      logger.info("Derived API keys.");
+    } else {
+      logger.warn("No existing API keys found, attempting create");
+      const created = await temp.createApiKey();
+      if (ClobService.isValidCreds(created)) {
+        creds = created;
+        logger.info("Created API keys.");
       } else {
-        logger.warn("No existing API keys found, attempting create");
-        const created = await temp.createApiKey();
-        if (ClobService.isValidCreds(created)) {
-          creds = created;
-          logger.info("Created API keys.");
-        } else {
-          throw new Error(
-            "Unable to create or derive API keys. Check SIGNATURE_TYPE, PRIVATE_KEY, and FUNDER_ADDRESS/PROFILE_ADDRESS.",
-          );
-        }
+        throw new Error(
+          "Unable to create or derive API keys. Check SIGNATURE_TYPE, PRIVATE_KEY, and FUNDER_ADDRESS/PROFILE_ADDRESS.",
+        );
       }
     }
 
@@ -146,7 +146,7 @@ export class ClobService {
         price,
         side,
         size,
-        expiration,  // 添加过期时间
+        expiration,
       },
       { tickSize: meta.tickSize, negRisk: meta.negRisk },
       OrderType.GTD,
