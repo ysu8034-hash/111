@@ -52,32 +52,19 @@ export class ClobService {
       funderAddress: config.funderAddress,
     });
 
-    // 强制忽略已有的 creds，重新派生 API Key
-    let creds = undefined;
-    
-    logger.info("Deriving Polymarket API keys");
-    const derived = await temp.deriveApiKey();
-    if (ClobService.isValidCreds(derived)) {
-      creds = derived;
-      logger.info("Derived API keys.");
-    } else {
-      logger.warn("No existing API keys found, attempting create");
-      const created = await temp.createApiKey();
-      if (ClobService.isValidCreds(created)) {
-        creds = created;
-        logger.info("Created API keys.");
-      } else {
-        throw new Error(
-          "Unable to create or derive API keys. Check SIGNATURE_TYPE, PRIVATE_KEY, and FUNDER_ADDRESS/PROFILE_ADDRESS.",
-        );
-      }
+    // 强制创建新的 API Key，完全忽略任何已有的 creds
+    logger.info("Force creating new API keys");
+    const newCreds = await temp.createApiKey();
+    if (!ClobService.isValidCreds(newCreds)) {
+      throw new Error("Failed to create new API keys. Check your private key and network.");
     }
+    logger.info("Successfully created new API keys");
 
     const client = new ClobClient({
       host: config.host,
       chain: config.chainId,
       signer: signer,
-      creds: creds,
+      creds: newCreds,
       signatureType: config.signatureType,
       funderAddress: config.funderAddress,
     });
@@ -137,7 +124,6 @@ export class ClobService {
       return;
     }
 
-    // 设置过期时间：当前时间 + 5 分钟（300 秒）
     const expiration = Math.floor(Date.now() / 1000) + 300;
 
     const resp = await this.client.createAndPostOrder(
