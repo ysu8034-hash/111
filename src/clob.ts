@@ -41,6 +41,10 @@ export class ClobService {
 
   static async init(config: ClobConfig, logger: Logger): Promise<ClobService> {
     const signer = new Wallet(config.privateKey);
+    
+    // 关键修复：确保 signatureType 正确传递（Magic 钱包必须为 2）
+    logger.info(`Initializing ClobClient with signatureType: ${config.signatureType}`);
+    
     const temp = new ClobClient(
       config.host,
       config.chainId,
@@ -135,6 +139,8 @@ export class ClobService {
       return;
     }
 
+    // 使用官方推荐的 createAndPostOrder 方法
+    // 注意：不要手动添加 feeRateBps，让 API 自动处理
     const resp = await this.client.createAndPostOrder(
       {
         tokenID: tokenId,
@@ -145,11 +151,14 @@ export class ClobService {
       { tickSize: meta.tickSize, negRisk: meta.negRisk },
       OrderType.GTC,
     );
+    
     if (resp?.error) {
       throw new Error(resp.error);
     }
     if (resp?.status && resp.status >= 400) {
       throw new Error(`Order failed (status ${resp.status})`);
     }
+    
+    this.logger.info("Order placed successfully", { tokenId, side, price, size });
   }
 }
