@@ -4,7 +4,7 @@ import {
   OrderType,
   Side,
   TickSize,
-} from "@polymarket/clob-client";
+} from "@polymarket/clob-client-v2";
 import { Wallet } from "ethers";
 import { Logger } from "./logger.js";
 
@@ -42,7 +42,6 @@ export class ClobService {
   static async init(config: ClobConfig, logger: Logger): Promise<ClobService> {
     const signer = new Wallet(config.privateKey);
     
-    // 关键修复：确保 signatureType 正确传递（Magic 钱包必须为 2）
     logger.info(`Initializing ClobClient with signatureType: ${config.signatureType}`);
     
     const temp = new ClobClient(
@@ -139,8 +138,7 @@ export class ClobService {
       return;
     }
 
-    // 使用官方推荐的 createAndPostOrder 方法
-    // 注意：不要手动添加 feeRateBps，让 API 自动处理
+    // V2 标准下单：使用 createAndPostOrder，传入市场元数据，使用 FOK 类型
     const resp = await this.client.createAndPostOrder(
       {
         tokenID: tokenId,
@@ -149,7 +147,7 @@ export class ClobService {
         size,
       },
       { tickSize: meta.tickSize, negRisk: meta.negRisk },
-      OrderType.GTC,
+      OrderType.FOK,  // 关键：使用 FOK 而不是 GTC
     );
     
     if (resp?.error) {
@@ -159,6 +157,6 @@ export class ClobService {
       throw new Error(`Order failed (status ${resp.status})`);
     }
     
-    this.logger.info("Order placed successfully", { tokenId, side, price, size });
+    this.logger.info("Order placed successfully (V2)", { tokenId, side, price, size });
   }
 }
