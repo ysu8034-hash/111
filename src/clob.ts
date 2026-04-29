@@ -47,7 +47,7 @@ export class ClobService {
     // V2 风格：使用对象参数
     const temp = new ClobClient({
       host: config.host,
-      chainId: config.chainId,
+      chain: config.chainId,
       signer: signer,
       signatureType: config.signatureType,
       funderAddress: config.funderAddress,
@@ -77,7 +77,7 @@ export class ClobService {
     // V2 风格：使用对象参数
     const client = new ClobClient({
       host: config.host,
-      chainId: config.chainId,
+      chain: config.chainId,
       signer: signer,
       creds: creds,
       signatureType: config.signatureType,
