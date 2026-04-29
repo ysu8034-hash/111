@@ -1,3 +1,4 @@
+// clob.service.ts
 import {
   ApiKeyCreds,
   ClobClient,
@@ -14,7 +15,6 @@ export interface ClobConfig {
   privateKey: string;
   signatureType: number;
   funderAddress?: string;
-  apiCreds?: ApiKeyCreds;
 }
 
 export interface MarketMeta {
@@ -39,19 +39,23 @@ export class ClobService {
     this.logger = logger;
   }
 
+  private static getApiCredsFromEnv(): ApiKeyCreds {
+    const key = process.env.POLY_API_KEY;
+    const secret = process.env.POLY_API_SECRET;
+    const passphrase = process.env.POLY_API_PASSPHRASE;
+    if (!key || !secret || !passphrase) {
+      throw new Error(
+        "Missing API credentials. Set POLY_API_KEY, POLY_API_SECRET, POLY_API_PASSPHRASE"
+      );
+    }
+    return { key, secret, passphrase };
+  }
+
   static async init(config: ClobConfig, logger: Logger): Promise<ClobService> {
     const signer = new Wallet(config.privateKey);
-    
     logger.info(`Initializing ClobClient with signatureType: ${config.signatureType}`);
-    
-    // 硬编码 API Key（使用最新的）
-    const hardcodedCreds: ApiKeyCreds = {
-      key: "019dd9be-1fe5-7bb9-91a8-0c5b3162a1a2",
-      secret: "xDe55InKTPUJ2NpnzXgNw8uoUqMo-UxYwx9rpA5MJos=",
-      passphrase: "785f4ff3765b4325946ad065640138613d93eefa5d396a361cb54119c2f9f899"
-    };
-    
-    const temp = new ClobClient({
+
+    const tempClient = new ClobClient({
       host: config.host,
       chain: config.chainId,
       signer: signer,
@@ -59,27 +63,23 @@ export class ClobService {
       funderAddress: config.funderAddress,
     });
 
-    // 直接使用硬编码的 API Key
-    let creds = hardcodedCreds;
-    logger.info("Using hardcoded API key");
-    
-    // 验证 API Key 是否有效
-    if (!ClobService.isValidCreds(creds)) {
-      logger.warn("Hardcoded API key validation failed, attempting to derive");
-      const derived = await temp.deriveApiKey();
-      if (ClobService.isValidCreds(derived)) {
+    let creds: ApiKeyCreds;
+    try {
+      creds = this.getApiCredsFromEnv();
+      logger.info("Using API credentials from environment");
+    } catch (envError) {
+      logger.warn("No env credentials, fallback to derive/create", envError);
+      const derived = await tempClient.deriveApiKey();
+      if (this.isValidCreds(derived)) {
         creds = derived;
         logger.info("Derived existing API key");
       } else {
-        logger.info("Creating new API key");
-        const created = await temp.createApiKey();
-        if (ClobService.isValidCreds(created)) {
+        const created = await tempClient.createApiKey();
+        if (this.isValidCreds(created)) {
           creds = created;
           logger.info("Created new API key");
         } else {
-          throw new Error(
-            "Unable to create or derive API keys. Check SIGNATURE_TYPE, PRIVATE_KEY, and FUNDER_ADDRESS/PROFILE_ADDRESS.",
-          );
+          throw new Error("Unable to obtain API credentials");
         }
       }
     }
@@ -92,6 +92,7 @@ export class ClobService {
       signatureType: config.signatureType,
       funderAddress: config.funderAddress,
     });
+
     return new ClobService(client, logger);
   }
 
@@ -135,21 +136,15 @@ export class ClobService {
   }): Promise<void> {
     const { tokenId, side } = params;
     const meta = await this.getMarketMeta(tokenId);
-
     const price = this.roundToTick(params.price, meta.tickSize, side);
     const size = params.size;
 
     if (size < meta.minOrderSize) {
-      this.logger.warn("Order size below minimum", {
-        tokenId,
-        size,
-        min: meta.minOrderSize,
-      });
+      this.logger.warn("Order size below minimum", { tokenId, size, min: meta.minOrderSize });
       return;
     }
 
     const expiration = Math.floor(Date.now() / 1000) + 300;
-
     const resp = await this.client.createAndPostOrder(
       {
         tokenID: tokenId,
@@ -159,16 +154,12 @@ export class ClobService {
         expiration,
       },
       { tickSize: meta.tickSize, negRisk: meta.negRisk },
-      OrderType.GTD,
+      OrderType.GTD
     );
-    
-    if (resp?.error) {
-      throw new Error(resp.error);
-    }
-    if (resp?.status && resp.status >= 400) {
-      throw new Error(`Order failed (status ${resp.status})`);
-    }
-    
-    this.logger.info("Order placed successfully (V2)", { tokenId, side, price, size });
+
+    if (resp?.error) throw new Error(resp.error);
+    if (resp?.status && resp.status >= 400) throw new Error(`HTTP ${resp.status}`);
+
+    this.logger.info("Order placed", { tokenId, side, price, size });
   }
 }
