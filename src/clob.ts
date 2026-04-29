@@ -44,14 +44,14 @@ export class ClobService {
     
     logger.info(`Initializing ClobClient with signatureType: ${config.signatureType}`);
     
-    const temp = new ClobClient(
-      config.host,
-      config.chainId,
-      signer,
-      undefined,
-      config.signatureType,
-      config.funderAddress,
-    );
+    // V2 风格：使用对象参数
+    const temp = new ClobClient({
+      host: config.host,
+      chainId: config.chainId,
+      signer: signer,
+      signatureType: config.signatureType,
+      funderAddress: config.funderAddress,
+    });
 
     let creds = config.apiCreds;
     if (!creds) {
@@ -74,14 +74,15 @@ export class ClobService {
       }
     }
 
-    const client = new ClobClient(
-      config.host,
-      config.chainId,
-      signer,
-      creds,
-      config.signatureType,
-      config.funderAddress,
-    );
+    // V2 风格：使用对象参数
+    const client = new ClobClient({
+      host: config.host,
+      chainId: config.chainId,
+      signer: signer,
+      creds: creds,
+      signatureType: config.signatureType,
+      funderAddress: config.funderAddress,
+    });
     return new ClobService(client, logger);
   }
 
@@ -138,7 +139,7 @@ export class ClobService {
       return;
     }
 
-    // V2 标准下单：使用 createAndPostOrder，传入市场元数据，使用 FOK 类型
+    // V2 标准下单：使用 GTD（Good Til Date）
     const resp = await this.client.createAndPostOrder(
       {
         tokenID: tokenId,
@@ -147,7 +148,7 @@ export class ClobService {
         size,
       },
       { tickSize: meta.tickSize, negRisk: meta.negRisk },
-      OrderType.FOK,  // 关键：使用 FOK 而不是 GTC
+      OrderType.GTD,  // 改为 GTD（V2 兼容）
     );
     
     if (resp?.error) {
