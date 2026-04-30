@@ -1,42 +1,44 @@
-export interface Logger {
-  info: (msg: string, meta?: Record<string, unknown>) => void;
-  warn: (msg: string, meta?: Record<string, unknown>) => void;
-  error: (msg: string, meta?: Record<string, unknown>) => void;
-  debug: (msg: string, meta?: Record<string, unknown>) => void;
+import "dotenv/config";
+import { webcrypto } from "crypto";
+import { ClobService } from "./clob.js";
+import { createLogger } from "./logger.js";
+
+// 给签名用（必须）
+if (!globalThis.crypto) {
+  (globalThis as any).crypto = webcrypto;
 }
 
-const formatMeta = (meta?: Record<string, unknown>) => {
-  if (!meta || Object.keys(meta).length === 0) return "";
-  return ` ${JSON.stringify(meta)}`;
-};
+const logger = createLogger(true);
 
-const colorize = (level: string, text: string): string => {
-  const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
-  if (!useColor) return text;
-  const colors: Record<string, string> = {
-    info: "\u001b[32m",  // green
-    warn: "\u001b[33m",  // yellow
-    error: "\u001b[31m", // red
-    debug: "\u001b[90m", // gray
-  };
-  const reset = "\u001b[0m";
-  const color = colors[level.toLowerCase()] ?? "";
-  return color ? `${color}${text}${reset}` : text;
-};
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const line = (level: string, msg: string, meta?: Record<string, unknown>) => {
-  const ts = new Date().toISOString();
-  const base = `[${ts}] ${level.toUpperCase()} ${msg}${formatMeta(meta)}`;
-  return colorize(level, base);
-};
-
-export const createLogger = (debugEnabled: boolean): Logger => {
-  return {
-    info: (msg, meta) => console.log(line("info", msg, meta)),
-    warn: (msg, meta) => console.warn(line("warn", msg, meta)),
-    error: (msg, meta) => console.error(line("error", msg, meta)),
-    debug: (msg, meta) => {
-      if (debugEnabled) console.log(line("debug", msg, meta));
+const main = async () => {
+  const clob = await ClobService.init(
+    {
+      host: "https://clob.polymarket.com",
+      chainId: 137,
+      privateKey: process.env.PRIVATE_KEY!,
+      signatureType: 1,
     },
-  };
+    logger
+  );
+
+  logger.info("Bot started (idle mode)");
+
+  // 👇 保持进程不退出（后面你可以加策略）
+  while (true) {
+    try {
+      // 现在先空跑（你后面加 copy / strategy）
+      logger.info("Heartbeat...");
+    } catch (err) {
+      logger.error("Loop error", err);
+    }
+
+    await sleep(10000); // 10秒一次
+  }
 };
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
