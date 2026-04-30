@@ -30,16 +30,16 @@ type OrderResponse = {
 export class ClobService {
   private client: ClobClient;
   private logger: Logger;
-  private metaCache: Map<string, { meta: MarketMeta; ts: number }> = new Map();
+  private metaCache = new Map<string, { meta: MarketMeta; ts: number }>();
 
   private constructor(client: ClobClient, logger: Logger) {
     this.client = client;
     this.logger = logger;
   }
 
-  // =============================
-  // API CREDS
-  // =============================
+  // =========================
+  // creds
+  // =========================
   private static isValidCreds(creds: unknown): creds is ApiKeyCreds {
     if (!creds || typeof creds !== "object") return false;
     const c = creds as ApiKeyCreds;
@@ -58,20 +58,15 @@ export class ClobService {
     return { key, secret, passphrase };
   }
 
-  // =============================
-  // INIT
-  // =============================
+  // =========================
+  // init
+  // =========================
   static async init(config: ClobConfig, logger: Logger): Promise<ClobService> {
     const signer = new Wallet(config.privateKey);
 
-    logger.info("Initializing ClobClient", {
-      chainId: config.chainId,
-      signatureType: config.signatureType,
-    });
-
     const tempClient = new ClobClient({
       host: config.host,
-      chainId: config.chainId,
+      chain: config.chainId, // ✅ 修复
       signer,
       signatureType: config.signatureType,
       funderAddress: config.funderAddress,
@@ -81,7 +76,7 @@ export class ClobService {
 
     try {
       creds = this.getApiCredsFromEnv();
-      logger.info("Using API credentials from ENV");
+      logger.info("Using API creds from ENV");
     } catch {
       logger.warn("No ENV creds, deriving...");
 
@@ -89,22 +84,22 @@ export class ClobService {
 
       if (this.isValidCreds(derived)) {
         creds = derived;
-        logger.info("Derived existing API key");
+        logger.info("Derived API key");
       } else {
         const created = await tempClient.createApiKey();
 
         if (this.isValidCreds(created)) {
           creds = created;
-          logger.info("Created new API key");
+          logger.info("Created API key");
         } else {
-          throw new Error("Unable to obtain API credentials");
+          throw new Error("Cannot obtain API creds");
         }
       }
     }
 
     const client = new ClobClient({
       host: config.host,
-      chainId: config.chainId,
+      chain: config.chainId, // ✅ 修复
       signer,
       creds,
       signatureType: config.signatureType,
@@ -114,9 +109,9 @@ export class ClobService {
     return new ClobService(client, logger);
   }
 
-  // =============================
-  // MARKET META
-  // =============================
+  // =========================
+  // market meta
+  // =========================
   async getMarketMeta(tokenId: string): Promise<MarketMeta> {
     const cached = this.metaCache.get(tokenId);
     const now = Date.now();
@@ -138,12 +133,11 @@ export class ClobService {
     return meta;
   }
 
-  // =============================
-  // PRICE ROUNDING
-  // =============================
+  // =========================
+  // rounding
+  // =========================
   private roundToTick(price: number, tickSize: TickSize, side: Side): number {
     const tick = Number(tickSize);
-
     if (!Number.isFinite(tick) || tick <= 0) return price;
 
     const factor = 1 / tick;
@@ -159,9 +153,9 @@ export class ClobService {
     return Number(result.toFixed(decimals));
   }
 
-  // =============================
-  // PLACE ORDER
-  // =============================
+  // =========================
+  // place order
+  // =========================
   async placeLimitOrder(params: {
     tokenId: string;
     side: Side;
@@ -176,15 +170,14 @@ export class ClobService {
     const size = params.size;
 
     if (size < meta.minOrderSize) {
-      this.logger.warn("Order size below minimum", {
-        tokenId,
+      this.logger.warn("Order too small", {
         size,
         min: meta.minOrderSize,
       });
       return;
     }
 
-    const expiration = Math.floor(Date.now() / 1000) + 3600; // 1 hour
+    const expiration = Math.floor(Date.now() / 1000) + 3600;
 
     const resp = (await this.client.createAndPostOrder(
       {
@@ -194,9 +187,12 @@ export class ClobService {
         size,
         expiration,
       },
-      { tickSize: meta.tickSize, negRisk: meta.negRisk },
+      {
+        tickSize: meta.tickSize,
+        negRisk: meta.negRisk,
+      } as Record<string, unknown>, // ✅ 修复 TS2345
       OrderType.GTD
-    )) as OrderResponse;
+    )) as OrderResponse; // ✅ 修复 unknown
 
     if (resp?.error) {
       this.logger.error("Order error", resp.error);
@@ -204,7 +200,6 @@ export class ClobService {
     }
 
     if (resp?.status && resp.status >= 400) {
-      this.logger.error("HTTP error", resp.status);
       throw new Error(`HTTP ${resp.status}`);
     }
 
