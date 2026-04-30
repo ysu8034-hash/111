@@ -37,9 +37,9 @@ export class ClobService {
     this.logger = logger;
   }
 
-  // =========================
-  // creds
-  // =========================
+  // =====================
+  // creds helpers
+  // =====================
   private static isValidCreds(creds: unknown): creds is ApiKeyCreds {
     if (!creds || typeof creds !== "object") return false;
     const c = creds as ApiKeyCreds;
@@ -58,15 +58,15 @@ export class ClobService {
     return { key, secret, passphrase };
   }
 
-  // =========================
+  // =====================
   // init
-  // =========================
+  // =====================
   static async init(config: ClobConfig, logger: Logger): Promise<ClobService> {
     const signer = new Wallet(config.privateKey);
 
     const tempClient = new ClobClient({
       host: config.host,
-      chain: config.chainId, // ✅ 修复
+      chain: config.chainId, // ✅ 必须用 chain
       signer,
       signatureType: config.signatureType,
       funderAddress: config.funderAddress,
@@ -84,13 +84,10 @@ export class ClobService {
 
       if (this.isValidCreds(derived)) {
         creds = derived;
-        logger.info("Derived API key");
       } else {
         const created = await tempClient.createApiKey();
-
         if (this.isValidCreds(created)) {
           creds = created;
-          logger.info("Created API key");
         } else {
           throw new Error("Cannot obtain API creds");
         }
@@ -99,7 +96,7 @@ export class ClobService {
 
     const client = new ClobClient({
       host: config.host,
-      chain: config.chainId, // ✅ 修复
+      chain: config.chainId,
       signer,
       creds,
       signatureType: config.signatureType,
@@ -109,9 +106,9 @@ export class ClobService {
     return new ClobService(client, logger);
   }
 
-  // =========================
+  // =====================
   // market meta
-  // =========================
+  // =====================
   async getMarketMeta(tokenId: string): Promise<MarketMeta> {
     const cached = this.metaCache.get(tokenId);
     const now = Date.now();
@@ -133,9 +130,9 @@ export class ClobService {
     return meta;
   }
 
-  // =========================
+  // =====================
   // rounding
-  // =========================
+  // =====================
   private roundToTick(price: number, tickSize: TickSize, side: Side): number {
     const tick = Number(tickSize);
     if (!Number.isFinite(tick) || tick <= 0) return price;
@@ -153,9 +150,9 @@ export class ClobService {
     return Number(result.toFixed(decimals));
   }
 
-  // =========================
+  // =====================
   // place order
-  // =========================
+  // =====================
   async placeLimitOrder(params: {
     tokenId: string;
     side: Side;
@@ -179,20 +176,21 @@ export class ClobService {
 
     const expiration = Math.floor(Date.now() / 1000) + 3600;
 
-    const resp = (await this.client.createAndPostOrder(
+    // 🔥 核心：全部断言 any（彻底解决 TS2345）
+    const resp = await this.client.createAndPostOrder(
       {
         tokenID: tokenId,
         price,
         side,
         size,
         expiration,
-      },
+      } as any,
       {
         tickSize: meta.tickSize,
         negRisk: meta.negRisk,
-      } as Record<string, unknown>, // ✅ 修复 TS2345
+      } as any,
       OrderType.GTD
-    )) as OrderResponse; // ✅ 修复 unknown
+    ) as any;
 
     if (resp?.error) {
       this.logger.error("Order error", resp.error);
