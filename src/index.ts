@@ -2,7 +2,7 @@ import "dotenv/config";
 import { webcrypto } from "crypto";
 import { loadConfig, ConfigError, type Config } from "./config.js";
 import { createLogger } from "./logger.js";
-import { ClobService } from "./clob.service.js";
+import { ClobService } from "./clob.js"; // ✅ 修复这里
 import { DataApiClient } from "./dataApi.js";
 import { CopyTrader } from "./copyTrader.js";
 import { RedeemService } from "./redeem.js";
@@ -17,7 +17,6 @@ import { nowSec, sleep } from "./utils.js";
 const REDEEM_COOLDOWN_SEC = 600;
 
 const main = async () => {
-  // 必须：给 Polymarket 签名用
   if (!globalThis.crypto) {
     (globalThis as any).crypto = webcrypto;
   }
@@ -36,7 +35,6 @@ const main = async () => {
   const logger = createLogger(config.debug);
   const state = await loadState(config.stateFile);
 
-  // ✅ 已修复：不再传 apiCreds
   const clob = await ClobService.init(
     {
       host: config.clobHost,
@@ -64,9 +62,6 @@ const main = async () => {
       )
     : null;
 
-  // =====================
-  // Copy Loop
-  // =====================
   const copyLoop = async () => {
     while (true) {
       try {
@@ -83,9 +78,6 @@ const main = async () => {
     }
   };
 
-  // =====================
-  // Redeem Loop
-  // =====================
   const redeemLoop = async () => {
     if (!redeemService) return;
 
