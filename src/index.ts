@@ -2,7 +2,7 @@ import "dotenv/config";
 import { webcrypto } from "crypto";
 import { loadConfig, ConfigError, type Config } from "./config.js";
 import { createLogger } from "./logger.js";
-import { ClobService } from "./clob.js";
+import { ClobService } from "./clob.service.js";
 import { DataApiClient } from "./dataApi.js";
 import { CopyTrader } from "./copyTrader.js";
 import { RedeemService } from "./redeem.js";
@@ -15,33 +15,28 @@ import {
 import { nowSec, sleep } from "./utils.js";
 
 const REDEEM_COOLDOWN_SEC = 600;
-const IDLE_SLEEP_MS = 60000;
-
-const idleLoop = async (): Promise<never> => {
-  while (true) {
-    console.log(`Fix configuration and restart the bot...`);
-    await sleep(IDLE_SLEEP_MS);
-  }
-};
 
 const main = async () => {
+  // 必须：给 Polymarket 签名用
   if (!globalThis.crypto) {
-    (globalThis as typeof globalThis & { crypto?: Crypto }).crypto =
-      webcrypto as Crypto;
+    (globalThis as any).crypto = webcrypto;
   }
+
   let config: Config;
   try {
     config = loadConfig();
   } catch (err) {
     if (err instanceof ConfigError) {
       console.error(`[config] ${err.message}`);
-      await idleLoop();
+      process.exit(1);
     }
     throw err;
   }
+
   const logger = createLogger(config.debug);
   const state = await loadState(config.stateFile);
 
+  // ✅ 已修复：不再传 apiCreds
   const clob = await ClobService.init(
     {
       host: config.clobHost,
@@ -49,9 +44,8 @@ const main = async () => {
       privateKey: config.privateKey,
       signatureType: config.signatureType,
       funderAddress: config.funderAddress,
-      apiCreds: config.apiCreds,
     },
-    logger,
+    logger
   );
 
   const dataApi = new DataApiClient(config.dataApiHost, logger);
@@ -65,42 +59,45 @@ const main = async () => {
           privateKey: config.privateKey,
           rpcUrl: config.rpcUrl!,
           txType: config.relayerTxType,
-          builderCreds: config.builderCreds,
-          builderSigningUrl: config.builderSigningUrl,
-          builderSigningToken: config.builderSigningToken,
         },
-        logger,
+        logger
       )
     : null;
 
+  // =====================
+  // Copy Loop
+  // =====================
   const copyLoop = async () => {
-    let lastHeartbeat = 0;
     while (true) {
       try {
-        const now = Date.now();
-        if (now - lastHeartbeat >= 30000) {
-          logger.info("Polling traders...");
-          lastHeartbeat = now;
-        }
         await copyTrader.runOnce();
         pruneSeenTrades(state, config.maxSeenTradesAgeSec);
         await saveState(config.stateFile, state);
       } catch (err) {
-        logger.error("Copy loop error", { error: (err as Error).message });
+        logger.error("Copy loop error", {
+          error: (err as Error).message,
+          stack: (err as Error).stack,
+        });
       }
       await sleep(config.pollIntervalMs);
     }
   };
 
+  // =====================
+  // Redeem Loop
+  // =====================
   const redeemLoop = async () => {
     if (!redeemService) return;
+
     while (true) {
       try {
         const positions = await dataApi.getPositions(
           config.profileAddress,
-          true,
+          true
         );
+
         const now = nowSec();
+
         const eligible = positions.filter((pos) => {
           const last = state.redeemAttempts[pos.conditionId] ?? 0;
           return now - last > REDEEM_COOLDOWN_SEC;
@@ -108,30 +105,27 @@ const main = async () => {
 
         if (eligible.length) {
           await redeemService.redeemPositions(eligible);
-          const attemptedConditions = new Set(
-            eligible.map((p) => p.conditionId),
-          );
-          for (const conditionId of attemptedConditions) {
-            markRedeemAttempt(state, conditionId);
+
+          for (const p of eligible) {
+            markRedeemAttempt(state, p.conditionId);
           }
+
           await saveState(config.stateFile, state);
         }
       } catch (err) {
-        logger.error("Redeem loop error", { error: (err as Error).message });
+        logger.error("Redeem loop error", {
+          error: (err as Error).message,
+        });
       }
+
       await sleep(config.redeemPollIntervalMs);
     }
   };
 
-  await Promise.all([copyLoop(), redeemLoop()]);
+  await Promise.allSettled([copyLoop(), redeemLoop()]);
 };
 
 main().catch((err) => {
-  if (err instanceof ConfigError) {
-    console.error(`[config] ${err.message}`);
-    void idleLoop();
-    return;
-  }
   console.error(err);
   process.exit(1);
 });
